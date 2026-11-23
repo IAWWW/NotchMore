@@ -174,13 +174,14 @@ private struct NotchPillButtonBody: View {
 struct NotchSearchField: View {
     let placeholder: String
     @Binding var text: String
+    var systemImage = "magnifyingglass"
 
     @FocusState private var isFocused: Bool
     @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
+            Image(systemName: systemImage)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(isFocused ? Color.primary : Color.secondary)
 

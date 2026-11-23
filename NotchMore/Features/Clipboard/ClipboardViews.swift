@@ -8,6 +8,7 @@ struct ClipboardHistoryView: View {
     @State private var searchQuery: String = ""
     @State private var hoveredItemId: UUID?
     @State private var selectedCategory: ClipboardCategory = .all
+    @State private var isFilterMenuOpen = false
     @State private var previewedItemID: UUID?
 
     var filteredHistory: [ClipboardItem] {
@@ -56,6 +57,11 @@ struct ClipboardHistoryView: View {
         .animation(.easeInOut(duration: 0.18), value: previewedItemID)
         .animation(.easeInOut(duration: 0.2), value: panelWidth)
         .animation(.easeInOut(duration: 0.2), value: panelHeight)
+        .onChange(of: searchQuery) { _, _ in isFilterMenuOpen = false }
+        .onHover { hovering in
+            if !hovering { isFilterMenuOpen = false }
+        }
+        .onDisappear { isFilterMenuOpen = false }
         .onChange(of: clipboardManager.history.map(\.id)) { _, ids in
             if let previewedItemID, !ids.contains(previewedItemID) {
                 self.previewedItemID = nil
@@ -63,42 +69,20 @@ struct ClipboardHistoryView: View {
         }
     }
 
-    private var historyContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            header
-                .padding(.horizontal, 14)
-                .padding(.top, 14)
+    private var usesCompactToolbar: Bool { panelWidth < 170 }
 
-            searchToolbar
-                .padding(.horizontal, 14)
+    private var historyContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            header
+                .padding(.horizontal, usesCompactToolbar ? 8 : 12)
+                .padding(.top, 10)
 
             ScrollView {
-                LazyVStack(spacing: 6) {
-                    if filteredHistory.isEmpty {
-                        ClipboardEmptyStateView(
-                            isSearchActive: !searchQuery.trimmingCharacters(
-                                in: .whitespacesAndNewlines
-                            ).isEmpty)
-                    } else {
-                        ForEach(filteredHistory) { item in
-                            ClipboardItemRow(
-                                item: item,
-                                isHovered: hoveredItemId == item.id,
-                                onCopy: { clipboardManager.copyToClipboard(item: item) },
-                                onOCR: { clipboardManager.copyOCRText(from: item) },
-                                onDelete: { clipboardManager.deleteItem(item: item) },
-                                onPin: { clipboardManager.togglePin(item: item) },
-                                onOpen: { openItem(item) }
-                            )
-                            .contentShape(Rectangle())
-                            .onHover { hovering in
-                                hoveredItemId = hovering ? item.id : nil
-                            }
-                        }
-                    }
+                if isFilterMenuOpen {
+                    categoryMenu
+                } else {
+                    historyRows
                 }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 10)
             }
             .frame(maxHeight: .infinity)
         }
@@ -106,64 +90,111 @@ struct ClipboardHistoryView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "doc.on.clipboard")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.primary)
+        HStack(spacing: 6) {
+            NotchSearchField(
+                placeholder: panelWidth < 228 ? "Search" : "Search clipboard",
+                text: $searchQuery,
+                systemImage: "doc.on.clipboard"
+            )
+            .frame(maxWidth: .infinity)
+            .layoutPriority(1)
 
-            categoryFilter
-                .padding(.horizontal, 14)
+            Button {
+                isFilterMenuOpen.toggle()
+            } label: {
+                Image(systemName: selectedCategory.filterSymbol)
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(NotchIconButtonStyle(
+                size: 26,
+                tint: selectedCategory == .all ? .primary : .accentColor,
+                isActive: isFilterMenuOpen || selectedCategory != .all
+            ))
+            .accessibilityLabel("Filter clipboard")
+            .accessibilityValue(selectedCategory.rawValue)
+            .help("Filter clipboard: \(selectedCategory.rawValue)")
+
+            if !usesCompactToolbar {
+                Button(action: deleteUnpinnedHistory) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .buttonStyle(NotchIconButtonStyle(size: 24, cornerRadius: 6, tint: .secondary))
+                .disabled(!hasUnpinnedHistoryItems)
+                .opacity(hasUnpinnedHistoryItems ? 1 : 0.42)
+                .help("Delete Unpinned Clipboard History")
+            }
+        }
+        .onKeyPress(.escape) {
+            guard isFilterMenuOpen else { return .ignored }
+            isFilterMenuOpen = false
+            return .handled
         }
     }
 
-    private var categoryFilter: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(ClipboardCategory.allCases, id: \.self) { category in
-                    ClipboardCategoryChip(
-                        title: category.rawValue,
-                        count: countForCategory(category),
-                        isSelected: selectedCategory == category
-                    ) {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            selectedCategory = category
-                        }
+    private var categoryMenu: some View {
+        VStack(spacing: 2) {
+            ForEach(ClipboardCategory.allCases, id: \.self) { category in
+                ClipboardFilterRow(
+                    title: category.rawValue,
+                    symbol: category.filterSymbol,
+                    count: countForCategory(category),
+                    isSelected: category == selectedCategory
+                ) {
+                    selectedCategory = category
+                    isFilterMenuOpen = false
+                }
+            }
+
+            if usesCompactToolbar {
+                Divider().padding(.vertical, 2)
+                ClipboardFilterRow(title: "Clear unpinned", symbol: "trash", action: deleteUnpinnedHistory)
+                    .disabled(!hasUnpinnedHistoryItems)
+                    .opacity(hasUnpinnedHistoryItems ? 1 : 0.42)
+            }
+        }
+        .padding(4)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, usesCompactToolbar ? 8 : 12)
+        .padding(.bottom, 8)
+    }
+
+    private var historyRows: some View {
+        let items = filteredHistory
+        return LazyVStack(spacing: 6) {
+            if items.isEmpty {
+                ClipboardEmptyStateView(
+                    isSearchActive: !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    isFiltered: selectedCategory != .all
+                )
+            } else {
+                ForEach(items) { item in
+                    ClipboardItemRow(
+                        item: item,
+                        isHovered: hoveredItemId == item.id,
+                        onCopy: { clipboardManager.copyToClipboard(item: item) },
+                        onOCR: { clipboardManager.copyOCRText(from: item) },
+                        onDelete: { clipboardManager.deleteItem(item: item) },
+                        onPin: { clipboardManager.togglePin(item: item) },
+                        onOpen: { openItem(item) }
+                    )
+                    .contentShape(Rectangle())
+                    .onHover { hovering in
+                        hoveredItemId = hovering ? item.id : nil
                     }
                 }
             }
-            .padding(.vertical, 1)
         }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 10)
     }
 
-    private var searchToolbar: some View {
-        HStack(spacing: 8) {
-            searchField
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    clipboardManager.deleteAllItems()
-                    hoveredItemId = nil
-                }
-            } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 11, weight: .medium))
-            }
-            .buttonStyle(
-                NotchIconButtonStyle(
-                    size: 24,
-                    cornerRadius: 6,
-                    tint: .secondary
-                )
-            )
-            .disabled(!hasUnpinnedHistoryItems)
-            .opacity(hasUnpinnedHistoryItems ? 1 : 0.42)
-            .help("Delete Unpinned Clipboard History")
+    private func deleteUnpinnedHistory() {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            clipboardManager.deleteAllItems()
+            hoveredItemId = nil
+            isFilterMenuOpen = false
         }
-    }
-
-    private var searchField: some View {
-        NotchSearchField(placeholder: "Search clipboard", text: $searchQuery)
-            .frame(maxWidth: .infinity)
     }
 
     private func countForCategory(_ category: ClipboardCategory) -> Int {
@@ -183,30 +214,62 @@ struct ClipboardHistoryView: View {
 
 // MARK: - Supporting Views
 
-struct ClipboardCategoryChip: View {
+private extension ClipboardCategory {
+    var filterSymbol: String {
+        switch self {
+        case .all: "line.3.horizontal.decrease"
+        case .text: "text.alignleft"
+        case .image: "photo"
+        case .file: "folder"
+        }
+    }
+}
+
+private struct ClipboardFilterRow: View {
     let title: String
-    let count: Int
-    let isSelected: Bool
+    let symbol: String
+    var count: Int? = nil
+    var isSelected = false
     let action: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .frame(width: 15)
+                    .accessibilityHidden(true)
                 Text(title)
-                    .font(.system(size: 10, weight: isSelected ? .semibold : .medium))
-
-                if count > 0 {
-                    Text("\(count)")
-                        .font(.system(size: 9, weight: .semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if let count {
+                    Text(count, format: .number)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .accessibilityHidden(true)
                 }
             }
+            .font(.system(size: 11))
+            .padding(.horizontal, 6)
+            .frame(minHeight: 23)
+            .background(
+                Color.white.opacity(isSelected ? 0.13 : isHovered ? 0.08 : 0),
+                in: RoundedRectangle(cornerRadius: 5)
+            )
+            .contentShape(Rectangle())
         }
-        .buttonStyle(NotchPillButtonStyle(height: 24, tint: .primary, isActive: isSelected))
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .onHover { isHovered = $0 }
     }
 }
 
 struct ClipboardEmptyStateView: View {
     let isSearchActive: Bool
+    let isFiltered: Bool
 
     var body: some View {
         VStack(spacing: 9) {
@@ -214,16 +277,15 @@ struct ClipboardEmptyStateView: View {
                 .font(.system(size: 20, weight: .light))
                 .foregroundStyle(.tertiary)
 
-            Text(isSearchActive ? "No matching clipboard items" : "Clipboard is empty")
+            Text(isSearchActive || isFiltered ? "No matching clipboard items" : "Clipboard is empty")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
 
-            Text(
-                isSearchActive
-                    ? "Try another keyword" : "Copied text, images, and files appear here"
-            )
-            .font(.system(size: 10, weight: .regular))
-            .foregroundStyle(.tertiary)
+            if isSearchActive || !isFiltered {
+                Text(isSearchActive ? "Try another keyword" : "Copied text, images, and files appear here")
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundStyle(.tertiary)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 18)
