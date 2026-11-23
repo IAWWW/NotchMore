@@ -48,6 +48,10 @@ final class DockPreviewManager: ObservableObject {
     static let shared = DockPreviewManager()
 
     private var pollingTimer: Timer?
+    private var globalPointerMonitor: Any?
+    private var localPointerMonitor: Any?
+    private var lastPointerMovement: TimeInterval = 0
+    private var isPollingSlowly = false
     private var hoverWorkItem: DispatchWorkItem?
     private var hideWorkItem: DispatchWorkItem?
     private var hoveredDockIdentifier: String?
@@ -61,28 +65,94 @@ final class DockPreviewManager: ObservableObject {
     private let hoverDelay: TimeInterval = 0.12
     private let hideDelay: TimeInterval = 0.16
     private let pollingInterval: TimeInterval = 0.04
+    private let stationaryPollingInterval: TimeInterval = 0.25
+    private let dockRevealGracePeriod: TimeInterval = 0.8
 
     private init() {}
 
+    private var hasPointerMonitors: Bool {
+        globalPointerMonitor != nil && localPointerMonitor != nil
+    }
+
     func start() {
-        guard pollingTimer == nil else { return }
-        pollingTimer = Timer.scheduledTimer(withTimeInterval: pollingInterval, repeats: true) {
-            [weak self] _ in
-            Task { @MainActor in
-                self?.pollMouseLocation()
-            }
+        guard pollingTimer == nil, globalPointerMonitor == nil, localPointerMonitor == nil else { return }
+
+        let pointerEvents: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
+        globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: pointerEvents) { [weak self] _ in
+            self?.pointerMoved()
         }
-        RunLoop.main.add(pollingTimer!, forMode: .common)
+        localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: pointerEvents) { [weak self] event in
+            self?.pointerMoved()
+            return event
+        }
+
+        if hasPointerMonitors {
+            pointerMoved()
+        } else {
+            // Keep hover detection available if registering a monitor failed.
+            removePointerMonitors()
+            startPolling()
+        }
     }
 
     func stop() {
-        pollingTimer?.invalidate()
-        pollingTimer = nil
+        removePointerMonitors()
+        stopPolling()
         hoverWorkItem?.cancel()
         hoverWorkItem = nil
-        hideWorkItem?.cancel()
-        hideWorkItem = nil
+        hoveredDockIdentifier = nil
         hidePreview()
+    }
+
+    private func removePointerMonitors() {
+        if let globalPointerMonitor { NSEvent.removeMonitor(globalPointerMonitor) }
+        if let localPointerMonitor { NSEvent.removeMonitor(localPointerMonitor) }
+        globalPointerMonitor = nil
+        localPointerMonitor = nil
+    }
+
+    private func pointerMoved() {
+        lastPointerMovement = ProcessInfo.processInfo.systemUptime
+        if let pollingTimer {
+            if isPollingSlowly {
+                isPollingSlowly = false
+                pollingTimer.fireDate = Date()
+            }
+            return
+        }
+
+        let mouse = NSEvent.mouseLocation
+        guard isPreviewVisible || isLikelyNearDock(mouse) else { return }
+        startPolling()
+    }
+
+    private func startPolling() {
+        let timer = Timer(timeInterval: pollingInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.pollPointer() }
+        }
+        pollingTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopPolling() {
+        pollingTimer?.invalidate()
+        pollingTimer = nil
+        isPollingSlowly = false
+    }
+
+    private func pollPointer() {
+        guard let timer = pollingTimer else { return }
+        let mouse = NSEvent.mouseLocation
+        let nearDock = isLikelyNearDock(mouse)
+        pollMouseLocation(mouse, nearDock: nearDock)
+
+        guard hasPointerMonitors else { return }
+        if !nearDock {
+            stopPolling()
+        } else if ProcessInfo.processInfo.systemUptime - lastPointerMovement >= dockRevealGracePeriod {
+            isPollingSlowly = true
+            timer.fireDate = Date(timeIntervalSinceNow: stationaryPollingInterval)
+        }
     }
 
     func setPreviewWindowFrame(_ frame: CGRect) {
@@ -104,10 +174,8 @@ final class DockPreviewManager: ObservableObject {
         WindowSwitcherManager.shared.activateWindowInfo(info)
     }
 
-    private func pollMouseLocation() {
-        let mouse = NSEvent.mouseLocation
-
-        guard isLikelyNearDock(mouse) else {
+    private func pollMouseLocation(_ mouse: CGPoint, nearDock: Bool) {
+        guard nearDock else {
             if isPreviewVisible, isPointerInPreviewInteractionArea(mouse) {
                 hideWorkItem?.cancel()
                 hideWorkItem = nil
@@ -144,8 +212,10 @@ final class DockPreviewManager: ObservableObject {
 
         let dockIdentifier = hoveredApp.stableIdentifier
         let stableFrame = stableDockItemFrame(hoveredApp.dockItemFrame, near: mouse)
-        anchorPoint = CGPoint(x: stableFrame.midX, y: stableFrame.midY)
-        anchorFrame = stableFrame
+        if anchorFrame != stableFrame {
+            anchorPoint = CGPoint(x: stableFrame.midX, y: stableFrame.midY)
+            anchorFrame = stableFrame
+        }
 
         if isPreviewVisible, dockIdentifier == visibleDockIdentifier {
             return

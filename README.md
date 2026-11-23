@@ -73,16 +73,16 @@ You can also build from Terminal:
 xcodebuild -scheme NotchMore -configuration Debug -derivedDataPath .build build
 ```
 
-Debug and release builds use different app names and bundle identifiers so they can have separate macOS permissions:
+Debug and release builds use separate bundle identifiers for macOS permissions. Both appear as NotchMore.
 
 ```text
-.build/Build/Products/Debug/NotchMoreDebug.app
+.build/Build/Products/Debug/NotchMore.app
 .build/Build/Products/Release/NotchMore.app
 ```
 
 ## Dependencies
 
-- [MediaRemoteAdapter](https://github.com/ejbills/mediaremote-adapter) for media metadata and playback controls
+- [MediaRemoteAdapter](https://github.com/ejbills/mediaremote-adapter) for media metadata and playback controls (included in `Vendor/mediaremote-adapter`)
 - [DynamicNotchKit](https://github.com/MrKai77/DynamicNotchKit) for notch panel presentation
 - [Sparkle](https://github.com/sparkle-project/Sparkle) for automatic updates
 

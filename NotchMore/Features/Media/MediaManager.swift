@@ -14,51 +14,70 @@ class MediaManager: ObservableObject {
     @Published var trackDuration: Double = 0
     @Published var trackElapsed: Double = 0
 
-    private let mediaController = MediaController()
+    private var mediaController: MediaController?
     private var artworkCache: [String: NSImage] = [:]
     private var artworkCacheOrder: [String] = []
     private var lastArtworkKey: String?
     private let maxArtworkCacheItems = 16
 
-    init() {
-        mediaController.onTrackInfoReceived = { [weak self] trackInfo in
-            DispatchQueue.main.async {
-                self?.handle(trackInfo)
-            }
+    func setMonitoringEnabled(_ enabled: Bool) {
+        guard enabled != (mediaController != nil) else { return }
+        if !enabled {
+            let controller = mediaController
+            mediaController = nil
+            controller?.stopListening()
+            currentTrackTitle = "Not Playing"
+            currentTrackArtist = "No media detected"
+            artwork = nil
+            sourceIcon = nil
+            sourceName = "Media"
+            isPlaying = false
+            trackDuration = 0
+            trackElapsed = 0
+            lastArtworkKey = nil
+            return
         }
 
-        mediaController.onPlaybackTimeUpdate = { [weak self] elapsedTime in
+        let controller = MediaController()
+        mediaController = controller
+        controller.onTrackInfoReceived = { [weak self, weak controller] trackInfo in
             DispatchQueue.main.async {
-                self?.handlePlaybackTimeUpdate(elapsedTime)
+                guard let self, let controller, self.mediaController === controller else { return }
+                self.handle(trackInfo)
             }
         }
-
-        mediaController.onListenerTerminated = {
+        controller.onPlaybackTimeUpdate = { [weak self, weak controller] elapsedTime in
+            DispatchQueue.main.async {
+                guard let self, let controller, self.mediaController === controller else { return }
+                self.handlePlaybackTimeUpdate(elapsedTime)
+            }
+        }
+        controller.onListenerTerminated = {
             print("MediaRemoteAdapter listener process was terminated.")
         }
-        mediaController.startListening()
+        controller.startListening()
         updateSystemVolume()
     }
 
     deinit {
-        mediaController.stopListening()
+        mediaController?.stopListening()
     }
 
     func playPause() {
-        mediaController.togglePlayPause()
+        mediaController?.togglePlayPause()
     }
 
     func nextTrack() {
-        mediaController.nextTrack()
+        mediaController?.nextTrack()
     }
 
     func previousTrack() {
-        mediaController.previousTrack()
+        mediaController?.previousTrack()
     }
 
     func setTime(seconds: Double) {
         let clamped = max(0, min(seconds, trackDuration > 0 ? trackDuration : seconds))
-        mediaController.setTime(seconds: clamped)
+        mediaController?.setTime(seconds: clamped)
         DispatchQueue.main.async {
             self.trackElapsed = clamped
         }

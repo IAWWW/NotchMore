@@ -329,6 +329,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Combine Observers
 
     private func setupCombineObservers() {
+        UserDefaults.standard.publisher(for: \.showNowPlaying)
+            .removeDuplicates()
+            .sink { [weak self] enabled in self?.mediaManager.setMonitoringEnabled(enabled) }
+            .store(in: &cancellables)
+
         UserDefaults.standard.publisher(for: \.enableClipboardHistory)
             .sink { [weak self] _ in self?.updateClipboardMonitoring() }
             .store(in: &cancellables)
@@ -666,6 +671,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - UserDefaults
 
 extension UserDefaults {
+    @objc dynamic var showNowPlaying: Bool {
+        object(forKey: "showNowPlaying") as? Bool ?? true
+    }
     @objc dynamic var enableClipboardHistory: Bool {
         return bool(forKey: "enableClipboardHistory")
     }

@@ -1,0 +1,4 @@
+https://github.com/ejbills/mediaremote-adapter
+Base revision: 3529aa25023082a2ceadebcd2c9c4a9430ee96b9
+
+Local edits stop pipe monitoring at EOF and support the embedded dylib used by Command Line Tools builds.
